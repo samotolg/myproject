@@ -6,14 +6,20 @@ from PyQt5.QAxContainer import *
 from PyQt5.QtCore import *
 import sqlite3 as sqlite
 import time
+import matplotlib.pyplot as plt
+import mpl_finance as mpl
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+import matplotlib.ticker as ticker
 
 TR_REQ_TIME_INTERVAL = 0.2
+
 class Kiwoom(QAxWidget):
     def __init__(self):
         super().__init__()
         self.kiwoom_connected = False
         self._create_kiwoom_instance()
         self._set_signal_slots()
+
 
     def _create_kiwoom_instance(self):
         self.setControl("KHOPENAPI.KHOpenAPICtrl.1")
@@ -34,6 +40,7 @@ class Kiwoom(QAxWidget):
         self.dynamicCall("CommRqData(QString, QString, int, QString", rqname, trcode, next, screen_no)
         self.tr_event_loop = QEventLoop()
         self.tr_event_loop.exec_()
+        return self.df
 
     def get_code_list_by_market(self, market):
         code_list = self.dynamicCall("getCodeListByMarket(QString)", market)
@@ -55,6 +62,9 @@ class Kiwoom(QAxWidget):
     def _opt10081(self, rqname, trcode):
         data_cnt = self._get_repeat_cnt(trcode, rqname)
 
+        cols = ['Open', 'High', 'Low', 'Close', 'Volume']
+        lstValue = []
+        dateValue = []
         for i in range(data_cnt):
             date = self._comm_get_data(trcode, "", rqname, i, "일자")
             open = self._comm_get_data(trcode, "", rqname, i, "시가")
@@ -62,7 +72,10 @@ class Kiwoom(QAxWidget):
             low = self._comm_get_data(trcode, "", rqname, i, "저가")
             close = self._comm_get_data(trcode, "", rqname, i, "현재가")
             volume = self._comm_get_data(trcode, "", rqname, i, "거래량")
-            print(date, open, high, low, close, volume)
+            lstValue.append([open, high, low, close, volume])
+            dateValue.append(date)
+            # print(date, open, high, low, close, volume)
+        self.df = pd.DataFrame(lstValue, columns=cols, index = dateValue)
 
     def _event_connect(self, err_code):
         if err_code == 0:
@@ -78,6 +91,7 @@ class Kiwoom(QAxWidget):
             self.remained_data = True
         else:
             self.remained_data = False
+
         if rqname == "opt10081_req":
             self._opt10081(rqname, trcode)
 
@@ -85,19 +99,32 @@ class Kiwoom(QAxWidget):
             self.tr_event_loop.exit()
         except AttributeError:
             pass
+
 class MyWindow(QWidget):
     def __init__(self):
         super().__init__()
         self.setupUi()
+        self.initialize()
+
+    # def __exit__(self, exception_type, exception_value, traceback):
+    #     self.db_con.close()
+
+    def initialize(self):
         self.kiwoom_connected = False
         self.listRetrieved = False
+        self.db_con = sqlite.connect("c:/work/project/stock_code.db")
+        print("Initialized")
+
+
     def setupUi(self):
-        self.setGeometry(200, 200, 500, 600)
+        self.setGeometry(200, 200, 1200, 600)
         self.setWindowTitle("주가정보")
+
+        self.list = QListWidget()
+        self.list.currentRowChanged.connect(self._listRowChanged)
 
         self.btnGetFromDB = QPushButton("DB 연결")
         self.btnGetFromDB.clicked.connect(self._btnConnectClickedDB)
-
         self.btnConnect = QPushButton("연결하기")
         self.btnConnect.clicked.connect(self._btnConnectClicked)
         self.btnGet = QPushButton("가져오기")
@@ -107,22 +134,27 @@ class MyWindow(QWidget):
         self.btnDaily = QPushButton("일봉 가져오기")
         self.btnDaily.clicked.connect(self._btnDailyClicked)
 
-        self.list = QListWidget()
-        self.list.currentRowChanged.connect(self._listRowChanged)
+        self.chart = plt.Figure()
+        self.canvas = FigureCanvas(self.chart)
 
         leftLayout = QVBoxLayout()
-        rightLayout = QVBoxLayout()
+        buttonLayout = QVBoxLayout()
         leftLayout.addWidget(self.list)
-        rightLayout.addWidget(self.btnGetFromDB)
-        rightLayout.addWidget(self.btnStore)
-        rightLayout.addWidget(self.btnConnect)
-        rightLayout.addWidget(self.btnGet)
-        rightLayout.addWidget(self.btnDaily)
-
+        buttonLayout.addWidget(self.btnGetFromDB)
+        buttonLayout.addWidget(self.btnStore)
+        buttonLayout.addWidget(self.btnConnect)
+        buttonLayout.addWidget(self.btnGet)
+        buttonLayout.addWidget(self.btnDaily)
+        rightLayout = QVBoxLayout()
+        rightLayout.addWidget(self.canvas)
 
         layout = QHBoxLayout()
         layout.addLayout(leftLayout)
+        layout.addLayout(buttonLayout)
         layout.addLayout(rightLayout)
+        layout.setStretchFactor(leftLayout, 0)
+        layout.setStretchFactor(buttonLayout, 0)
+        layout.setStretchFactor(rightLayout, 1)
         self.setLayout(layout)
 
     def _btnDailyClicked(self):
@@ -135,44 +167,64 @@ class MyWindow(QWidget):
             return
         code = selected[0]
         name = selected[1]
-        if (self.kiwoom_connected == True):
-            print("kiwoom connected is TRUE")
-        else:
-            print("kiwoom connected is FALSE")
 
         if (self.kiwoom_connected == False):
             return
         next = 0
         self.kiwoom.remained_data = True
-        if (self.kiwoom.remained_data == True):
-            print("remained_data is TRUE")
-        else:
-            print("remained_data is FALSE")
 
+        cols = ['Open', 'High', 'Low', 'Close', 'Volume']
+        df = pd.DataFrame(columns=cols)
         while (self.kiwoom.remained_data == True):
             time.sleep(TR_REQ_TIME_INTERVAL)
             self.kiwoom.set_input_value("종목코드", code)
             self.kiwoom.set_input_value("기준일자", "20180727")
             self.kiwoom.set_input_value("수정주가구분", 1)
-            self.kiwoom.comm_rq_data("opt10081_req", "opt10081", next, "0101")
+            ndf = self.kiwoom.comm_rq_data("opt10081_req", "opt10081", next, "0101")
+            df = df.append(ndf)
             next = 2
         print("모두 읽어왔습니다")
+        #print (df)
+        df.to_sql(code+":"+name, self.db_con, if_exists='replace')
+        self.db_con.commit()
+        self._draw_chart(df)
+
+    def _draw_chart(self, df):
+        data = df.head(30)
+        date = pd.to_datetime(data.index)
+        xlist = [v.strftime("%m/%d") for v in date]
+
+        self.chart.clear()
+        ax = self.chart.add_subplot(111)
+
+        dlist = range(len(xlist))
+
+        ax.xaxis.set_major_locator(ticker.FixedLocator(dlist))
+        ax.xaxis.set_major_formatter(ticker.FixedFormatter(xlist))
+
+        ax.invert_xaxis()
+
+        mpl.candlestick2_ohlc(ax, data["Open"], data["High"], data["Low"] , data["Close"], width=0.5, colorup='r', colordown='b')
+        #ax.legend(loc='best')
+        ax.grid()
+        self.canvas.draw()
 
     def _btnStoreClicked(self):
-        if (self.listRetrieved == False):
+        if self.listRetrieved == False:
             return
-        con = sqlite.connect("c:/work/project/stock_code.db")
-        cursor = con.cursor()
+
         lstCode = []
         lstName = []
         for i in range(self.list.count()):
             item = self.list.item(i).text().split(":")
             lstCode.append(item[0])
             lstName.append(item[1])
-        data = pd.DataFrame({"Code" : lstCode, "Name" : lstName}, index=None)
-        data.to_sql("stock_code", con, if_exists='replace')
-        con.commit()
-        con.close()
+        print(lstCode, lstName)
+        data = pd.DataFrame({"Name" : lstName}, index=lstCode)
+        print(data)
+        data.to_sql("stock_code", self.db_con, if_exists='replace')
+        self.db_con.commit()
+
         QMessageBox.about(self, "Information", "DB에 저장이 되었습니다")
 
     def _listRowChanged(self, item):
@@ -180,18 +232,17 @@ class MyWindow(QWidget):
         print(text[0] + "---" + text[1])
 
     def _btnConnectClickedDB(self):
-        self.con = sqlite.connect("c:/work/project/stock_code.db")
-        df = pd.read_sql("SELECT * FROM stock_code", self.con, index_col=None)
+        df = pd.read_sql("SELECT * FROM stock_code", self.db_con, index_col=None)
         cnt = df.__len__()
         for i in range(cnt):
-            row = df.iloc[i]["Code"] + ":" + df.iloc[i]["Name"]
+            row = df.iloc[i]["index"] + ":" + df.iloc[i]["Name"]
             self.list.addItem(row)
-        self.con.close()
 
     def _btnConnectClicked(self):
         self._create_kiwoom()
         self.kiwoom.comm_connect()
         self.kiwoom_connected = True
+
     def _btnGetClicked(self):
         if (self.kiwoom_connected == False or self.listRetrieved == True):
             return
@@ -200,6 +251,7 @@ class MyWindow(QWidget):
             name = self.kiwoom.get_code_name(code)
             self.list.addItem(code + ":" + name)
         self.listRetrieved = True
+
     def _create_kiwoom(self):
         self.kiwoom = Kiwoom()
 
