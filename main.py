@@ -89,6 +89,7 @@ class MyWindow(QWidget):
     def __init__(self):
         super().__init__()
         self.setupUi()
+        self.kiwoom_connected = False
         self.listRetrieved = False
     def setupUi(self):
         self.setGeometry(200, 200, 500, 600)
@@ -125,19 +126,21 @@ class MyWindow(QWidget):
         self.setLayout(layout)
 
     def _btnDailyClicked(self):
+        if (self.listRetrieved == False):
+            return
         selected = self.list.currentItem().text().split(":")
         print(selected)
-        if selected == -1:
+        if selected == "":
             QMessageBox.about(self, "오류", "선택된 종목이 없습니다")
             return
         code = selected[0]
         name = selected[1]
-        if (self.kiwoom.kiwoom_connected == True):
+        if (self.kiwoom_connected == True):
             print("kiwoom connected is TRUE")
         else:
             print("kiwoom connected is FALSE")
 
-        if (self.kiwoom.kiwoom_connected == False):
+        if (self.kiwoom_connected == False):
             return
         next = 0
         self.kiwoom.remained_data = True
@@ -156,6 +159,8 @@ class MyWindow(QWidget):
         print("모두 읽어왔습니다")
 
     def _btnStoreClicked(self):
+        if (self.listRetrieved == False):
+            return
         con = sqlite.connect("c:/work/project/stock_code.db")
         cursor = con.cursor()
         lstCode = []
@@ -186,15 +191,15 @@ class MyWindow(QWidget):
     def _btnConnectClicked(self):
         self._create_kiwoom()
         self.kiwoom.comm_connect()
-
+        self.kiwoom_connected = True
     def _btnGetClicked(self):
-        if (self.listRetrieved == True):
+        if (self.kiwoom_connected == False or self.listRetrieved == True):
             return
         code_list = self.kiwoom.get_code_list_by_market('0')
         for code in code_list:
             name = self.kiwoom.get_code_name(code)
             self.list.addItem(code + ":" + name)
-        listRetrieved = True
+        self.listRetrieved = True
     def _create_kiwoom(self):
         self.kiwoom = Kiwoom()
 
